@@ -1,16 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-
-const STAGES = [
-  "Reading your CV",
-  "Understanding the role",
-  "Checking your evidence against it",
-  "Looking for contradictions",
-  "Writing your report",
-];
-
-const STAGE_DURATION_MS = 8000;
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import LoadingSequence from "./components/LoadingSequence";
 
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -19,6 +11,7 @@ function formatFileSize(bytes: number) {
 }
 
 export default function Home() {
+  const router = useRouter();
   const [cvMode, setCvMode] = useState<"file" | "text">("file");
   const [cvFile, setCvFile] = useState<File | null>(null);
   const [cvText, setCvText] = useState("");
@@ -30,27 +23,9 @@ export default function Home() {
   const [level, setLevel] = useState("");
 
   const [isLoading, setIsLoading] = useState(false);
-  const [stageIndex, setStageIndex] = useState(0);
-  const [stageProgress, setStageProgress] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!isLoading) return;
-    const start = Date.now();
-    const timer = setInterval(() => {
-      const pct = Math.min(100, ((Date.now() - start) / STAGE_DURATION_MS) * 100);
-      setStageProgress(pct);
-      if (pct >= 100) {
-        clearInterval(timer);
-        if (stageIndex < STAGES.length - 1) {
-          setStageIndex((i) => i + 1);
-          setStageProgress(0);
-        }
-      }
-    }, 100);
-    return () => clearInterval(timer);
-  }, [isLoading, stageIndex]);
 
   const isValidCvFile = (file: File) => {
     const name = file.name.toLowerCase();
@@ -88,37 +63,47 @@ export default function Home() {
   const hasCv = cvMode === "file" ? cvFile !== null : cvText.trim().length > 0;
   const canSubmit = hasCv && jobDescription.trim().length >= 100;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!canSubmit) return;
-    setStageIndex(0);
-    setStageProgress(0);
+    if (cvMode === "file") {
+      setSubmitError(
+        'File uploads aren\'t analysed yet — choose "Paste as text instead" to continue.'
+      );
+      return;
+    }
+
+    setSubmitError(null);
     setIsLoading(true);
+
+    try {
+      const res = await fetch("/api/analyse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cvText,
+          jobText: jobDescription,
+          sector,
+          level,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "The review failed. Please try again.");
+      }
+      sessionStorage.setItem("cv-review-report", JSON.stringify(data));
+      router.push("/results");
+    } catch (err) {
+      setIsLoading(false);
+      setSubmitError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Please try again."
+      );
+    }
   };
 
   if (isLoading) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-[#14213D] px-6">
-        <div className="flex flex-col items-center gap-3">
-          {STAGES.slice(0, stageIndex).map((stage) => (
-            <div
-              key={stage}
-              className="font-serif text-lg text-[#EFEAE0] opacity-30 transition-opacity duration-150"
-            >
-              {stage}
-            </div>
-          ))}
-          <div className="font-serif text-lg text-[#EFEAE0]">
-            {STAGES[stageIndex]}
-          </div>
-        </div>
-        <div className="relative mt-8 h-px w-64 bg-[#24344F]">
-          <div
-            className="absolute left-0 top-0 h-full bg-[#7A2E2E]"
-            style={{ width: `${stageProgress}%`, transition: "width 100ms linear" }}
-          />
-        </div>
-      </div>
-    );
+    return <LoadingSequence />;
   }
 
   return (
@@ -229,7 +214,7 @@ export default function Home() {
 
           <div className="flex flex-col gap-3">
             <span className="text-[12px] uppercase tracking-[0.1em] text-[#9AA3B5]">
-              THE ROLE
+              JOB DESCRIPTION
             </span>
             <textarea
               value={jobDescription}
@@ -302,6 +287,9 @@ export default function Home() {
           >
             REQUEST REVIEW
           </button>
+          {submitError && (
+            <p className="text-xs text-[#7A2E2E]">{submitError}</p>
+          )}
           <span className="text-xs text-[#9AA3B5]">
             We never invent experience or add skills you don&apos;t have.
           </span>
